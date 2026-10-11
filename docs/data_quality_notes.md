@@ -49,13 +49,58 @@ From a full pass over the file with `scripts/profile_passenger_counts.py` (Day 1
 
 **Busiest Metro lines by total boardings (FY2024-25, approximate):** Pakenham 24.1M · Frankston 20.7M · Lilydale 20.1M · Craigieburn 18.1M · Mernda 18.0M. (Before data quality adjustments; not a finding to publish yet.)
 
+## Snowflake load and staging (Day 2)
+
+- **Load (`sql/02_load_raw.sql`):** all three files loaded into RAW with 0 errors. Row counts match: 15,937,506 / 222 / 549. `PUT` compressed the 2.8 GB CSV to 314 MB, and the whole script took 2.5 minutes.
+- **Staging (`sql/03_staging.sql`):** 14,547,467 Metro rows, as expected. Total boardings are 224,374,850, matching the pandas profile exactly.
+- **Missing scheduled times:** when a time is missing, arrival and departure are both missing, on the same 13,777 Metro rows. Deriving the time band from departure time alone loses nothing.
+- **Boardings by time band:**
+
+  | Time band | Hours | Boardings | Share |
+  |---|---|---|---|
+  | Early | before 07:00 | 9,503,260 | 4.2% |
+  | AM Peak | 07:00–08:59 | 47,926,900 | 21.4% |
+  | Inter-peak | 09:00–15:59 | 81,678,500 | 36.4% |
+  | PM Peak | 16:00–18:59 | 63,259,250 | 28.2% |
+  | Evening | 19:00 onwards | 21,901,700 | 9.8% |
+  | Unknown | no time | 105,240 | 0.0% |
+
+## Data quality checks (Day 2, `sql/04_data_quality_checks.sql`)
+
+The script is read-only and re-runnable, and takes about 15 seconds. Results from 11 Oct 2026:
+
+| # | Check | Result | Status |
+|---|---|---|---|
+| 1 | Row counts and failed casts | RAW Metro 14,547,467 = STAGING 14,547,467. 0 failed casts across all 11 typed columns | Pass |
+| 2 | Duplicates | 2,570 repeats on (date, train, station, direction), 5,140 rows. **0** once `stop_sequence_number` is added. 0 exact duplicate rows | Pass: see note |
+| 3 | Negative or NULL counts | 0 negative, 0 NULL. Every count is a multiple of 10 | Pass |
+| 4 | All-zero rows by line × month | 4 lines over 10%: Stony Point 36.8%, Alamein 21.8%, Flemington Racecourse 17.6%, Williamstown 12.5% | Flagged |
+| 5 | Calendar gaps and day types | 365 data dates = 365 FY24-25 calendar dates, none missing either way. 0 day-of-week mismatches. Day types agree on 364 of 365 dates | Pass, 1 exception |
+| 6 | Load continuity | Within a stop: 74.4% exact, the other 25.6% off by exactly 10 (one bin), none worse. Between stops: 13,702,784 of 13,702,784 exact | Pass |
+| 7 | Station totals vs entries | All 222 names match. Rank correlation 0.998. Raw share gaps are distorted by interchange transfers: see note | Pass, with explanation |
+
+**What each result means and what was done:**
+
+- **Check 2: the true grain includes `stop_sequence_number`.** A train can call at the same station twice on one trip, e.g. around the City Loop. So the unique key is (business_date, train_number, station_name, direction, stop_sequence_number). The marts will group on this key, never on the shorter one.
+- **Check 4: zero rows understate the quiet lines.** The busiest lines are 1.4–7.2% zero rows. Flemington Racecourse is also volatile month to month (7.3–35.8%), because it only runs on event days. **Action:** Stony Point and Flemington Racecourse stay out of the line forecast, as planned. Alamein and Williamstown are borderline (see open questions). Every line is kept in the descriptive analysis, with a caveat.
+  - There's also a line called `Richmond and City Loop` (30,702 rows, 9.7% zero rows). It isn't a real passenger line, probably short shunting or terminating services. Check on Day 3 before it shows up on a "busiest lines" chart.
+- **Check 5: 28 Jan 2025 is the one day-type mismatch.** The source says `School Holiday`; `calendar.csv` says `Normal Weekday`, because Term 1 officially starts that day. It's likely a student-free day, which explains why DTP counted it as a holiday. Effect: 1 date of 365.
+- **Check 6: the counts hold together.** The 10-passenger gaps within a stop are what you'd expect from rounding four values to multiples of 10 separately. No gap is larger than one bin. Between stops, the load carries over with no breaks at all. Within-service loads are internally consistent, so peak load analysis can rely on them.
+- **Check 7: the gap is explained, not an error.**
+  - **Shares are a poor comparison here.** The build plan's test (a share gap over 10%) flags 215 of 222 stations. That's because three interchanges add tens of millions of transfer boardings: Flinders Street (2.43 boardings per entry), Richmond (2.92) and North Melbourne (2.99). The extra transfers lift the network ratio to 1.26, which shrinks every other station's share by about 21%. The median share gap is −22.8%.
+  - **Comparing station by station, the sources agree.** Metro-only stations (205) have 1.02 boardings per entry overall, with a median of 0.97. The two sources also rank stations in almost the same order (correlation 0.998), and both have the same top 3: Flinders Street, Southern Cross, Melbourne Central.
+  - **Low ratios have two causes:**
+    - Some stations are shared with V/Line, so their entries include V/Line passengers that aren't in the Metro boardings: Sunbury 0.67, East Pakenham 0.72, Footscray.
+    - Stony Point line stations (Baxter 0.14, Tyabb 0.23) have many zero rows (see check 4).
+  - **Action:** report the reconciliation as boardings per entry and rank agreement, not share difference. Name the three interchanges as the source of the gap.
+
 ## Known limitations (from the DataVic dataset description)
 
 - Counts are **modelled estimates** built from myki touch-ons, barrier counts, manual surveys and conductor counts, not direct counts.
 - Accuracy is lowest at **busy interchanges** such as the City Loop, where it's hard to tell which train a transferring passenger took.
 - Accuracy is **significantly reduced on disruption days**.
 - The model **isn't capacity-constrained**, so a few services show unrealistically high loads. Treat them as "very crowded", not as fact.
-- **Station entries won't reconcile exactly** with this dataset. DTP's published station totals add a 5% transfer uplift and use different rounding, and boardings include transfers (see finding 9). The Day 3 reconciliation should expect a gap and explain it, rather than treat every difference over 10% as an error.
+- **Station entries won't reconcile exactly** with this dataset. DTP's published station totals add a 5% transfer uplift and use different rounding, and boardings include transfers (see finding 9). Check 7 confirmed the gap is concentrated at three interchanges.
 - The data model was upgraded in 2026 and all years were reprocessed. Mode values changed from `Metro`/`VLine` to `Metro Trains`/`V/Line`.
 
 ## Decisions
@@ -63,10 +108,17 @@ From a full pass over the file with `scripts/profile_passenger_counts.py` (Day 1
 | Decision | Reason |
 |---|---|
 | Load the 2.8 GB CSV with Snowflake CLI (`snow sql`) `PUT` + `COPY INTO` | Too big for the Snowsight upload limit. Snowflake CLI replaces SnowSQL, which Snowflake now calls legacy |
-| Keep the time band boundaries from the build plan, derived from `Departure_Time_Scheduled` | No time-block column in the source |
-| Calendar school holidays = any date outside official term dates | Matches how vic.gov.au defines terms. Compare with the source's `Day_Type` in staging |
+| Time bands from `Departure_Time_Scheduled`: Early < 07:00, AM Peak 07:00–08:59, Inter-peak 09:00–15:59, PM Peak 16:00–18:59, Evening 19:00+ | No time-block column in the source. A separate `Early` band keeps AM peak clean and matches the "pre-AM peak" column in station entries |
+| Rows with no scheduled time get `time_band = 'Unknown'` | 13,777 rows (0.09%). They stay in daily totals but drop out of peak analysis |
+| Calendar school holidays = any date outside official term dates | Matches how vic.gov.au defines terms. Agrees with the source's `Day_Type` on 364 of 365 dates (check 5) |
+| Renamed `GROUP` → `line_group`, `date` → `calendar_date`, entries `stop_name` → `station_name` | `GROUP` and `DATE` are reserved words. A shared station name column makes joins simple |
+| Grain = date + train + station + direction + `stop_sequence_number` | Check 2: the shorter key has 2,570 repeats from trains calling twice at one station |
+| Reconcile stations as boardings per entry and rank agreement, not share difference | Check 7: interchange transfers distort shares for every station |
 
 ## Open questions
 
-- Does the source's `Day_Type = 'School Holiday'` line up exactly with `calendar.csv`? Check in staging.
-- Time handling for missing scheduled times (finding 5): confirm the `'Unknown'` time band approach.
+- **28 Jan 2025:** align `calendar.csv` with the source (mark it a school holiday), or keep the official term dates? Aligning keeps the forecast's school holiday flag consistent with DTP's day types.
+- **Alamein (21.8%) and Williamstown (12.5%) zero rows:** keep them in the line forecast with a caveat, or exclude them like Stony Point and Flemington Racecourse?
+- **`Richmond and City Loop` line:** what are these 30,702 rows, and should they be left out of line-level charts?
+
+**Resolved on Day 2:** the source's `Day_Type` matches `calendar.csv` on all but one date (check 5). The `'Unknown'` time band approach was confirmed.
