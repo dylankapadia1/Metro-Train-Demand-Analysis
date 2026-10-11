@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 02_load_raw.sql
--- Uploads the three source CSVs to Snowflake and loads them into RAW tables.
+-- Uploads the four source CSVs to Snowflake and loads them into RAW tables.
 -- Run from the repo root with Snowflake CLI (PUT doesn't work in Snowsight):
 --     snow sql -c metro -f sql/02_load_raw.sql
 --
@@ -52,11 +52,15 @@ PUT 'file://F:/Personal/Career/Portfolio/Metro-Train-Demand-Analysis/data/raw/an
     @RAW.SOURCE_STAGE/station_entries/
     AUTO_COMPRESS = TRUE;
 
+PUT 'file://F:/Personal/Career/Portfolio/Metro-Train-Demand-Analysis/data/raw/monthly_average_patronage_by_day_type_and_by_mode.csv'
+    @RAW.SOURCE_STAGE/monthly_patronage/
+    AUTO_COMPRESS = TRUE;
+
 PUT 'file://F:/Personal/Career/Portfolio/Metro-Train-Demand-Analysis/data/reference/calendar.csv'
     @RAW.SOURCE_STAGE/calendar/
     AUTO_COMPRESS = TRUE OVERWRITE = TRUE;  -- small file we regenerate, so always refresh
 
--- Check: should list three .gz files.
+-- Check: should list four .gz files.
 LIST @RAW.SOURCE_STAGE;
 
 -- -----------------------------------------------------------------------------
@@ -107,6 +111,19 @@ CREATE OR REPLACE TABLE RAW.STATION_ENTRIES (
 )
 COMMENT = 'DataVic annual metropolitan train station entries FY2024-25, as loaded (all VARCHAR)';
 
+-- DTP's official monthly patronage (station entries + 5% uplift, from myki and
+-- barrier data). Used to validate the modelled passenger counts (check 8).
+CREATE OR REPLACE TABLE RAW.MONTHLY_PATRONAGE (
+    YEAR         VARCHAR,
+    MONTH        VARCHAR,
+    MONTH_NAME   VARCHAR,
+    DAY_OF_WEEK  VARCHAR,
+    DAY_TYPE     VARCHAR,
+    MODE         VARCHAR,
+    PAX_DAILY    VARCHAR
+)
+COMMENT = 'DataVic monthly average patronage by day type and by mode, all modes 2018 onwards, as loaded (all VARCHAR)';
+
 CREATE OR REPLACE TABLE RAW.CALENDAR (
     DATE               VARCHAR,
     DAY_OF_WEEK        VARCHAR,
@@ -134,6 +151,11 @@ COPY INTO RAW.STATION_ENTRIES
     FILE_FORMAT = (FORMAT_NAME = 'RAW.CSV_FORMAT')
     ON_ERROR = ABORT_STATEMENT;
 
+COPY INTO RAW.MONTHLY_PATRONAGE
+    FROM @RAW.SOURCE_STAGE/monthly_patronage/
+    FILE_FORMAT = (FORMAT_NAME = 'RAW.CSV_FORMAT')
+    ON_ERROR = ABORT_STATEMENT;
+
 COPY INTO RAW.CALENDAR
     FROM @RAW.SOURCE_STAGE/calendar/
     FILE_FORMAT = (FORMAT_NAME = 'RAW.CSV_FORMAT')
@@ -148,6 +170,9 @@ FROM RAW.PASSENGER_COUNTS
 UNION ALL
 SELECT 'STATION_ENTRIES', COUNT(*), 222, IFF(COUNT(*) = 222, 'OK', 'MISMATCH')
 FROM RAW.STATION_ENTRIES
+UNION ALL
+SELECT 'MONTHLY_PATRONAGE', COUNT(*), 4450, IFF(COUNT(*) = 4450, 'OK', 'MISMATCH')
+FROM RAW.MONTHLY_PATRONAGE
 UNION ALL
 SELECT 'CALENDAR', COUNT(*), 549, IFF(COUNT(*) = 549, 'OK', 'MISMATCH')
 FROM RAW.CALENDAR;

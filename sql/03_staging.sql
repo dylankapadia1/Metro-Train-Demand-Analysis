@@ -104,7 +104,22 @@ SELECT
 FROM RAW.STATION_ENTRIES;
 
 -- -----------------------------------------------------------------------------
--- 3. Calendar: one row per date, 1 Jul 2024 to 31 Dec 2025.
+-- 3. Monthly patronage (official DTP figures): one row per month x day of week
+--    x day type x mode. Average passengers per day, rounded to the nearest 50.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE STAGING.MONTHLY_PATRONAGE
+COMMENT = 'DTP monthly average daily patronage by day of week, day type and mode, typed'
+AS
+SELECT
+    DATE_FROM_PARTS(TRY_TO_NUMBER(year), TRY_TO_NUMBER(month), 1) AS month_start,
+    TRIM(day_of_week)                                            AS day_of_week,
+    TRIM(day_type)                                               AS day_type,   -- Normal Weekday, School Holiday Weekday, Weekend
+    TRIM(mode)                                                   AS mode,       -- e.g. MetroTrain, Tram, MetroBus
+    TRY_TO_NUMBER(pax_daily)                                     AS pax_daily
+FROM RAW.MONTHLY_PATRONAGE;
+
+-- -----------------------------------------------------------------------------
+-- 4. Calendar: one row per date, 1 Jul 2024 to 31 Dec 2025.
 --    The column is renamed calendar_date because DATE is also a type name.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE STAGING.CALENDAR
@@ -122,7 +137,7 @@ SELECT
 FROM RAW.CALENDAR;
 
 -- -----------------------------------------------------------------------------
--- 4. Quick checks. The full data quality checks are in 04_data_quality_checks.sql.
+-- 5. Quick checks. The full data quality checks are in 04_data_quality_checks.sql.
 -- -----------------------------------------------------------------------------
 
 -- Row counts: Metro rows expected 14,547,467 (from the Day 1 profile).
@@ -131,6 +146,8 @@ SELECT 'PASSENGER_COUNTS' AS table_name, COUNT(*) AS rows_staged, 14547467 AS ro
 FROM STAGING.PASSENGER_COUNTS
 UNION ALL
 SELECT 'STATION_ENTRIES', COUNT(*), 222, IFF(COUNT(*) = 222, 'OK', 'MISMATCH') FROM STAGING.STATION_ENTRIES
+UNION ALL
+SELECT 'MONTHLY_PATRONAGE', COUNT(*), 4450, IFF(COUNT(*) = 4450, 'OK', 'MISMATCH') FROM STAGING.MONTHLY_PATRONAGE
 UNION ALL
 SELECT 'CALENDAR', COUNT(*), 549, IFF(COUNT(*) = 549, 'OK', 'MISMATCH') FROM STAGING.CALENDAR;
 

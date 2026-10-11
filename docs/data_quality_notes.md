@@ -9,6 +9,7 @@ Each entry says where the finding came from so it can be re-checked.
 |---|---|---|---|---|
 | [Train Service Passenger Counts](https://discover.data.vic.gov.au/dataset/train-service-passenger-counts), FY2024-25 | `train_service_passenger_counts_fy_2024_2025.csv` | 2,837,419,169 bytes (2.8 GB) | 15,937,506 (14,547,467 Metro Trains) | CC BY 4.0, Department of Transport and Planning |
 | [Annual metropolitan train station patronage (station entries)](https://discover.data.vic.gov.au/dataset/annual-metropolitan-train-station-patronage-station-entries), FY2024-25 | `annual_metropolitan_train_station_entries_fy_2024_2025.csv` | 22,122 bytes | 222 stations | CC BY 4.0, Department of Transport and Planning |
+| [Monthly average patronage by day type and by mode](https://discover.data.vic.gov.au/dataset/monthly-average-patronage-by-day-type-and-by-mode), Jan 2018 onwards | `monthly_average_patronage_by_day_type_and_by_mode.csv` | 234,233 bytes | 4,450 (month × day of week × day type × mode) | CC BY 4.0, Department of Transport and Planning. Official figures from myki and barrier data: station entries + 5% transfer uplift. Downloaded 11 Oct 2026. Used for check 8 |
 | Calendar (self-built) | `data/reference/calendar.csv` | | 549 days (1 Jul 2024 to 31 Dec 2025) | Built by `scripts/build_calendar.py` from data.gov.au public holidays + vic.gov.au school terms |
 
 Raw files are downloaded to `data/raw/` (git-ignored) and are not committed.
@@ -75,16 +76,18 @@ The script is read-only and re-runnable, and takes about 15 seconds. Results fro
 | 2 | Duplicates | 2,570 repeats on (date, train, station, direction), 5,140 rows. **0** once `stop_sequence_number` is added. 0 exact duplicate rows | Pass: see note |
 | 3 | Negative or NULL counts | 0 negative, 0 NULL. Every count is a multiple of 10 | Pass |
 | 4 | All-zero rows by line × month | 4 lines over 10%: Stony Point 36.8%, Alamein 21.8%, Flemington Racecourse 17.6%, Williamstown 12.5% | Flagged |
-| 5 | Calendar gaps and day types | 365 data dates = 365 FY24-25 calendar dates, none missing either way. 0 day-of-week mismatches. Day types agree on 364 of 365 dates | Pass, 1 exception |
+| 5 | Calendar gaps and day types | 365 data dates = 365 FY24-25 calendar dates, none missing either way. 0 day-of-week mismatches. Day types agreed on 364 of 365 dates; **365 of 365** after the calendar fix | Pass (after fix) |
 | 6 | Load continuity | Within a stop: 74.4% exact, the other 25.6% off by exactly 10 (one bin), none worse. Between stops: 13,702,784 of 13,702,784 exact | Pass |
 | 7 | Station totals vs entries | All 222 names match. Rank correlation 0.998. Raw share gaps are distorted by interchange transfers: see note | Pass, with explanation |
+| 8 | Modelled counts vs DTP official monthly patronage *(added Day 3)* | Monthly normal-weekday pattern: correlation **0.999**, no month off by more than 1.0 index point. Day-of-week pattern within 0.7 points. Level ratio steady at 1.25–1.27 | Pass |
 
 **What each result means and what was done:**
 
 - **Check 2: the true grain includes `stop_sequence_number`.** A train can call at the same station twice on one trip, e.g. around the City Loop. So the unique key is (business_date, train_number, station_name, direction, stop_sequence_number). The marts will group on this key, never on the shorter one.
-- **Check 4: zero rows understate the quiet lines.** The busiest lines are 1.4–7.2% zero rows. Flemington Racecourse is also volatile month to month (7.3–35.8%), because it only runs on event days. **Action:** Stony Point and Flemington Racecourse stay out of the line forecast, as planned. Alamein and Williamstown are borderline (see open questions). Every line is kept in the descriptive analysis, with a caveat.
-  - There's also a line called `Richmond and City Loop` (30,702 rows, 9.7% zero rows). It isn't a real passenger line, probably short shunting or terminating services. Check on Day 3 before it shows up on a "busiest lines" chart.
-- **Check 5: 28 Jan 2025 is the one day-type mismatch.** The source says `School Holiday`; `calendar.csv` says `Normal Weekday`, because Term 1 officially starts that day. It's likely a student-free day, which explains why DTP counted it as a holiday. Effect: 1 date of 365.
+- **Check 4: zero rows understate the quiet lines.** The busiest lines are 1.4–7.2% zero rows. Flemington Racecourse is also volatile month to month (7.3–35.8%), because it only runs on event days. **Action:** Stony Point and Flemington Racecourse stay out of the line forecast, as planned.
+  - **Alamein and Williamstown stay in the forecast, with a caveat.** Their zero share is steady month to month: Alamein 19.0–24.7%, Williamstown 9.7–15.1%. So their levels are understated, but the weekly pattern and trend, which the forecast is tested on, still hold. The forecast and its naive baseline use the same data, so the comparison stays fair. `MART.DIM_LINE` will carry a `data_caveat` for them.
+  - Every line is kept in the descriptive analysis, with a caveat where it applies.
+- **Check 5: 28 Jan 2025 was the one day-type mismatch, now fixed.** The source said `School Holiday`, but `calendar.csv` said `Normal Weekday`, because Term 1 officially starts that day. The first day of Term 1 is student-free, and government school students start a day later, so DTP counts it as a school holiday. **Action:** `scripts/build_calendar.py` now starts 2025 Term 1 on the students' start date, 29 Jan. Only this row of `calendar.csv` changed. I reloaded `RAW.CALENDAR`, rebuilt staging and re-ran the checks: day types now agree on all 365 dates. The forecast period (Jul–Sep 2025) has no Term 1, so this doesn't affect it.
 - **Check 6: the counts hold together.** The 10-passenger gaps within a stop are what you'd expect from rounding four values to multiples of 10 separately. No gap is larger than one bin. Between stops, the load carries over with no breaks at all. Within-service loads are internally consistent, so peak load analysis can rely on them.
 - **Check 7: the gap is explained, not an error.**
   - **Shares are a poor comparison here.** The build plan's test (a share gap over 10%) flags 215 of 222 stations. That's because three interchanges add tens of millions of transfer boardings: Flinders Street (2.43 boardings per entry), Richmond (2.92) and North Melbourne (2.99). The extra transfers lift the network ratio to 1.26, which shrinks every other station's share by about 21%. The median share gap is −22.8%.
@@ -93,6 +96,32 @@ The script is read-only and re-runnable, and takes about 15 seconds. Results fro
     - Some stations are shared with V/Line, so their entries include V/Line passengers that aren't in the Metro boardings: Sunbury 0.67, East Pakenham 0.72, Footscray.
     - Stony Point line stations (Baxter 0.14, Tyabb 0.23) have many zero rows (see check 4).
   - **Action:** report the reconciliation as boardings per entry and rank agreement, not share difference. Name the three interchanges as the source of the gap.
+- **Check 8: the model's patterns match the official figures.** Added on Day 3, after March 2025 came out 16% above an average weekday (analysis Q5) and needed checking against an independent source.
+  - **Why the levels differ:** DTP's official monthly patronage comes from myki and barrier data, not from the passenger-count model. It counts station entries + 5%, while the model counts every boarding, including transfers. So only the **shape** is compared: each month as an index (100 = the FY average), averaged the same way on both sides (per month × day of week first, then across the five weekdays).
+  - **Monthly:** the two series correlate at 0.999. The largest gap is 1.0 index point (Dec 2024). March is 116.3 in the model and 115.5 officially.
+  - **Day of week:** Mon 88.9 vs 89.6, Tue 105.3 vs 105.2, Wed 104.7 vs 104.1, Thu 107.3 vs 106.8, Fri 93.8 vs 94.4.
+  - **Level:** 1.25–1.27 model boardings per official passenger in every month. This is the transfer effect from check 7, and it's stable, not drifting.
+  - **March is the peak every year in the official data.** Compared with the average of February and May: +8.1% in 2018 and 2019, +10.7% to +12.7% in 2023–25, and +16.2% in 2026. (2020–22 are distorted by COVID.)
+  - **Not established:** the official data shows the March peak is real and recurring, but not why it happens. A full month of school and university semester 1 with no holidays, plus major events, is a plausible explanation, but these sources don't confirm it.
+  - **I found no planned works** in February or May 2025 that would have pushed those months down. The only works found were Metro Tunnel testing bus replacements on Pakenham and Cranbourne on 14, 15 and 17 April 2025 ([Pakenham News](https://pakenhamnews.starcommunity.com.au/news/2025-04-14/bus-replacements-for-pakenham-cranbourne-lines/)).
+  - **Action:** report March as a recurring seasonal peak, confirmed by the official data, with no cause stated. For the forecast (Day 4), one year of data can't teach a model a yearly pattern, so this goes in as a stated limitation. Forecasting Jul–Sep 2025 doesn't cross a March, so it doesn't change the forecast period.
+
+## `Richmond and City Loop` line (investigated Day 3)
+
+The source has a `Line_Name` of `Richmond and City Loop` with 30,702 rows. It isn't a corridor line. It's two kinds of short service inside the city:
+
+| Line group | What it is | Trains | When | Boardings |
+|---|---|---|---|---|
+| City Cordon | Extra PM peak services from Richmond → Flinders Street via the Loop | 9 | Weekdays only (normal and school holiday), 15:29–18:07 | 394,780 |
+| City Loop | Trains that start and end at Flinders Street, going round the Loop: positioning runs and short workings | 42–138 a day | All day, every day | 251,030 |
+
+- **Size:** 645,810 boardings in total, 0.29% of the network's 224,374,850.
+- **Link to check 2:** the 2,570 Flinders Street → Flinders Street services account for exactly the 2,570 duplicates found there. These are trains calling at Flinders Street twice on one trip.
+
+**Action:**
+- **Kept** in network and station totals. These are real passengers, and taking them out would understate Flinders Street and the City Loop stations.
+- **Flagged** in `MART.DIM_LINE` with `is_corridor_line = FALSE` and the label "City Loop & short services".
+- **Left out** of line rankings, the line heatmap and the forecast.
 
 ## Known limitations (from the DataVic dataset description)
 
@@ -110,15 +139,24 @@ The script is read-only and re-runnable, and takes about 15 seconds. Results fro
 | Load the 2.8 GB CSV with Snowflake CLI (`snow sql`) `PUT` + `COPY INTO` | Too big for the Snowsight upload limit. Snowflake CLI replaces SnowSQL, which Snowflake now calls legacy |
 | Time bands from `Departure_Time_Scheduled`: Early < 07:00, AM Peak 07:00–08:59, Inter-peak 09:00–15:59, PM Peak 16:00–18:59, Evening 19:00+ | No time-block column in the source. A separate `Early` band keeps AM peak clean and matches the "pre-AM peak" column in station entries |
 | Rows with no scheduled time get `time_band = 'Unknown'` | 13,777 rows (0.09%). They stay in daily totals but drop out of peak analysis |
-| Calendar school holidays = any date outside official term dates | Matches how vic.gov.au defines terms. Agrees with the source's `Day_Type` on 364 of 365 dates (check 5) |
+| Calendar school holidays = any date outside term dates, with Term 1 starting on the students' first day | Matches vic.gov.au terms and DTP's `Day_Type` on all 365 dates (check 5). The official first day of Term 1 is student-free |
 | Renamed `GROUP` → `line_group`, `date` → `calendar_date`, entries `stop_name` → `station_name` | `GROUP` and `DATE` are reserved words. A shared station name column makes joins simple |
 | Grain = date + train + station + direction + `stop_sequence_number` | Check 2: the shorter key has 2,570 repeats from trains calling twice at one station |
 | Reconcile stations as boardings per entry and rank agreement, not share difference | Check 7: interchange transfers distort shares for every station |
+| Line forecast excludes Stony Point, Flemington Racecourse and `Richmond and City Loop` | The first two have too many zero rows or swing too much month to month (check 4). The third isn't a corridor line. Alamein and Williamstown stay in, with a caveat |
+| `Richmond and City Loop` kept in network and station totals, flagged `is_corridor_line = FALSE` | Real passengers (0.29% of boardings), but short city services, not a line |
+| Busiest-services ranking covers regular services only: those running on at least 100 of the 199 normal weekdays | Otherwise one-off event trains rank first (a Flemington Racecourse train that ran once ranked #1). The 2,560 regular services run 100–199 days and the 1,198 others run 62 or fewer, so the cut-off sits in a natural gap |
+| Validate the modelled data against DTP's official monthly patronage, comparing the shape (index) rather than the level | Independent source (myki and barrier data). The levels differ by design, because boardings include transfers. Check 8 |
+| Transfer hub = 2 or more boardings per barrier entry | A transparent rule that picks out exactly Flinders Street (2.43), Richmond (2.92) and North Melbourne (2.99). Check 7 |
 
 ## Open questions
 
-- **28 Jan 2025:** align `calendar.csv` with the source (mark it a school holiday), or keep the official term dates? Aligning keeps the forecast's school holiday flag consistent with DTP's day types.
-- **Alamein (21.8%) and Williamstown (12.5%) zero rows:** keep them in the line forecast with a caveat, or exclude them like Stony Point and Flemington Racecourse?
-- **`Richmond and City Loop` line:** what are these 30,702 rows, and should they be left out of line-level charts?
+None at the moment.
 
-**Resolved on Day 2:** the source's `Day_Type` matches `calendar.csv` on all but one date (check 5). The `'Unknown'` time band approach was confirmed.
+**Resolved:**
+- Day 2: the `'Unknown'` time band approach was confirmed.
+- Day 3, step 0:
+  - 28 Jan 2025 is now a school holiday in the calendar (check 5).
+  - Alamein and Williamstown stay in the forecast with a caveat (check 4).
+  - `Richmond and City Loop` is kept in totals but flagged as not a corridor line.
+- Day 3, step 2: March 2025's +16% is real and recurs every year, confirmed against DTP's official patronage (check 8). The cause isn't established, so none is stated.

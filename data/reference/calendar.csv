@@ -210,7 +210,7 @@ date,day_of_week,is_weekday,is_public_holiday,holiday_name,is_school_holiday,fis
 2025-01-25,Saturday,False,False,,True,7,FY24-25
 2025-01-26,Sunday,False,False,,True,7,FY24-25
 2025-01-27,Monday,True,True,Australia Day,True,7,FY24-25
-2025-01-28,Tuesday,True,False,,False,7,FY24-25
+2025-01-28,Tuesday,True,False,,True,7,FY24-25
 2025-01-29,Wednesday,True,False,,False,7,FY24-25
 2025-01-30,Thursday,True,False,,False,7,FY24-25
 2025-01-31,Friday,True,False,,False,7,FY24-25

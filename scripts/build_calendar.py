@@ -36,12 +36,14 @@ PUBLIC_HOLIDAYS = {
     "2025-12-26": "Boxing Day",
 }
 
-# Official term start and end dates. Any date outside a term counts as school holidays.
-# Term 1 uses the official start date; government school students start a day later.
+# Term start and end dates. Any date outside a term counts as school holidays.
+# Term 1 starts on the day students start, a day after the official start date:
+# the first day is student-free, and DTP's passenger counts label it 'School Holiday'
+# (see check 5 in docs/data_quality_notes.md).
 SCHOOL_TERMS = [
     ("2024-07-15", "2024-09-20"),  # 2024 Term 3
     ("2024-10-07", "2024-12-20"),  # 2024 Term 4
-    ("2025-01-28", "2025-04-04"),  # 2025 Term 1
+    ("2025-01-29", "2025-04-04"),  # 2025 Term 1 (official start 28 Jan is student-free)
     ("2025-04-22", "2025-07-04"),  # 2025 Term 2
     ("2025-07-21", "2025-09-19"),  # 2025 Term 3
     ("2025-10-06", "2025-12-19"),  # 2025 Term 4

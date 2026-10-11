@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 04_data_quality_checks.sql
--- Seven checks on the RAW and STAGING tables. Read-only: nothing is changed.
+-- Eight checks on the RAW and STAGING tables. Read-only: nothing is changed.
 -- Run from the repo root:
 --     snow sql -c metro -f sql/04_data_quality_checks.sql
 --
@@ -289,3 +289,111 @@ SELECT station_name, has_vline, entries_rank, boardings_rank, entries_share_pct,
 FROM STATION_RECONCILIATION
 ORDER BY entries_rank
 LIMIT 10;
+
+-- =============================================================================
+-- CHECK 8: Modelled counts vs DTP's official monthly patronage
+-- DTP's "Monthly average patronage by day type and by mode" comes from myki and
+-- barrier data, not from the passenger-count model. Levels differ (boardings
+-- include transfers; official figures are entries + 5%), so this compares the
+-- SHAPE: each month's normal-weekday average as an index (100 = the FY average),
+-- and the same for each day of the week. Both sides are averaged the same way:
+-- first per month x day of week, then across the five weekdays.
+-- =============================================================================
+WITH ours_daily AS (
+    SELECT business_date, day_of_week, DATE_TRUNC('month', business_date) AS month_start,
+           SUM(passenger_boardings) AS boardings
+    FROM STAGING.PASSENGER_COUNTS
+    WHERE day_type = 'Normal Weekday'
+    GROUP BY 1, 2, 3
+),
+ours AS (
+    SELECT month_start, AVG(dow_avg) AS ours_avg
+    FROM (SELECT month_start, day_of_week, AVG(boardings) AS dow_avg
+          FROM ours_daily GROUP BY 1, 2)
+    GROUP BY month_start
+),
+official AS (
+    SELECT month_start, AVG(pax_daily) AS official_avg
+    FROM STAGING.MONTHLY_PATRONAGE
+    WHERE mode = 'MetroTrain' AND day_type = 'Normal Weekday'
+      AND month_start BETWEEN '2024-07-01' AND '2025-06-01'
+    GROUP BY month_start
+),
+joined AS (
+    SELECT o.month_start,
+           ROUND(o.ours_avg)                                         AS ours_avg_daily,
+           ROUND(f.official_avg)                                     AS official_avg_daily,
+           ROUND(o.ours_avg / f.official_avg, 2)                     AS boardings_per_official_pax,
+           ROUND(100 * o.ours_avg / AVG(o.ours_avg) OVER (), 1)      AS ours_index,
+           ROUND(100 * f.official_avg / AVG(f.official_avg) OVER (), 1) AS official_index
+    FROM ours o
+    JOIN official f USING (month_start)
+)
+SELECT TO_CHAR(month_start, 'Mon YYYY') AS month,
+       ours_avg_daily, official_avg_daily, boardings_per_official_pax,
+       ours_index, official_index,
+       ROUND(ours_index - official_index, 1)                         AS index_gap,
+       IFF(ABS(ours_index - official_index) <= 2, 'OK', 'CHECK')     AS result
+FROM joined
+ORDER BY month_start;
+
+-- Summary: correlation of the two monthly series and the largest gap.
+WITH ours_daily AS (
+    SELECT business_date, day_of_week, DATE_TRUNC('month', business_date) AS month_start,
+           SUM(passenger_boardings) AS boardings
+    FROM STAGING.PASSENGER_COUNTS WHERE day_type = 'Normal Weekday' GROUP BY 1, 2, 3
+),
+ours AS (
+    SELECT month_start, AVG(dow_avg) AS ours_avg
+    FROM (SELECT month_start, day_of_week, AVG(boardings) AS dow_avg FROM ours_daily GROUP BY 1, 2)
+    GROUP BY month_start
+),
+official AS (
+    SELECT month_start, AVG(pax_daily) AS official_avg
+    FROM STAGING.MONTHLY_PATRONAGE
+    WHERE mode = 'MetroTrain' AND day_type = 'Normal Weekday'
+      AND month_start BETWEEN '2024-07-01' AND '2025-06-01'
+    GROUP BY month_start
+),
+idx AS (
+    SELECT 100 * o.ours_avg / AVG(o.ours_avg) OVER ()         AS ours_index,
+           100 * f.official_avg / AVG(f.official_avg) OVER () AS official_index
+    FROM ours o JOIN official f USING (month_start)
+)
+SELECT COUNT(*)                                        AS months_compared,
+       ROUND(CORR(ours_index, official_index), 3)      AS monthly_correlation,
+       ROUND(MAX(ABS(ours_index - official_index)), 1) AS max_index_gap,
+       IFF(monthly_correlation >= 0.95, 'OK', 'CHECK') AS result
+FROM idx;
+
+-- Day of week, normal weekdays, FY2024-25: index 100 = the average weekday.
+WITH ours AS (
+    SELECT day_of_week, AVG(boardings) AS ours_avg
+    FROM (SELECT business_date, day_of_week, SUM(passenger_boardings) AS boardings
+          FROM STAGING.PASSENGER_COUNTS WHERE day_type = 'Normal Weekday' GROUP BY 1, 2)
+    GROUP BY day_of_week
+),
+official AS (
+    SELECT day_of_week, AVG(pax_daily) AS official_avg
+    FROM STAGING.MONTHLY_PATRONAGE
+    WHERE mode = 'MetroTrain' AND day_type = 'Normal Weekday'
+      AND month_start BETWEEN '2024-07-01' AND '2025-06-01'
+    GROUP BY day_of_week
+)
+SELECT day_of_week,
+       ROUND(100 * ours_avg / AVG(ours_avg) OVER (), 1)         AS ours_index,
+       ROUND(100 * official_avg / AVG(official_avg) OVER (), 1) AS official_index
+FROM ours JOIN official USING (day_of_week)
+ORDER BY DECODE(day_of_week, 'Monday', 1, 'Tuesday', 2, 'Wednesday', 3, 'Thursday', 4, 'Friday', 5);
+
+-- Is March always the peak? March vs the average of February and May, official
+-- data, every year it's available.
+SELECT YEAR(month_start)                                           AS year,
+       ROUND(AVG(IFF(MONTH(month_start) = 3, pax_daily, NULL)))   AS march_avg,
+       ROUND(AVG(IFF(MONTH(month_start) IN (2, 5), pax_daily, NULL))) AS feb_may_avg,
+       ROUND(100 * (march_avg / feb_may_avg - 1), 1)               AS march_uplift_pct
+FROM STAGING.MONTHLY_PATRONAGE
+WHERE mode = 'MetroTrain' AND day_type = 'Normal Weekday'
+GROUP BY 1
+HAVING march_avg IS NOT NULL AND feb_may_avg IS NOT NULL
+ORDER BY 1;
