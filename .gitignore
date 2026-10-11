@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project: raw data is large and re-downloadable from DataVic, so never commit it
+data/raw/
