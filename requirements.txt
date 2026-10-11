@@ -1,0 +1,21 @@
+# Python packages for the scripts and the forecast notebook.
+# Tested on Python 3.14.7 (Windows, 64-bit), 11 Oct 2026.
+#
+# Set up from the repo root:
+#     python -m venv .venv
+#     .venv\Scripts\python -m pip install -r requirements.txt
+#
+# Snowflake login: the notebook connects with connection_name="metro", the same
+# connection Snowflake CLI uses (snow connection add). No credentials in the repo.
+
+pandas==2.3.3                                  # snowflake-connector-python[pandas] needs pandas < 3
+numpy==2.5.4
+snowflake-connector-python[pandas]==4.8.0      # [pandas] adds fetch_pandas_all() and write_pandas()
+pyarrow==23.0.1
+statsmodels==0.15.0                            # seasonal naive helpers, SARIMAX
+prophet==1.5.0                                 # forecast model; the Windows wheel includes the Stan engine
+matplotlib==3.11.2
+python-dotenv==1.2.4
+ipykernel==7.4.0                               # lets VS Code run the notebook with this .venv
+nbconvert==7.17.1                              # runs the notebook from the command line with outputs saved:
+                                               #   jupyter nbconvert --to notebook --execute --inplace notebooks/forecast_weekday_peak.ipynb

@@ -123,6 +123,45 @@ The source has a `Line_Name` of `Richmond and City Loop` with 30,702 rows. It is
 - **Flagged** in `MART.DIM_LINE` with `is_corridor_line = FALSE` and the label "City Loop & short services".
 - **Left out** of line rankings, the line heatmap and the forecast.
 
+## Forecast data issues (Day 4, `notebooks/forecast_weekday_peak.ipynb`)
+
+The forecast series is daily AM peak boardings, Mon–Fri, for the 15 forecast lines (`MART.DAILY_LINE_DEMAND`). Exploring it before modelling turned up the issues below. Results are in `docs/forecast_results.md`.
+
+**Disruption days.**
+- **Rule:** a line-day is disrupted when the line has **no AM peak data** (closed), or when AM peak **services and boardings are both under 80%** of that line's median for the same day type. Public holidays and 23 Dec – 3 Jan are excluded from the rule, because they're low by nature.
+- **Why both have to be low:** services alone flagged false positives.
+  - Public holidays run a Sunday timetable.
+  - On Mon 3 Mar 2025, services looked low on 9 lines but boardings were normal, which points to a timetable or data quirk.
+- **Result:**
+
+| Period | Line-days | Closed | Low service | Disrupted |
+|---|---|---|---|---|
+| Training (Jul 2024 – Mar 2025) | 2,940 | 7 | 32 | 39 (1.3%) |
+| Test (Apr – Jun 2025) | 975 | 7 | 7 | 14 (1.4%) |
+
+- **They match known events:**
+  - Sandringham closed 9–16 Dec 2024.
+  - Summer works on Pakenham, Cranbourne and Sunbury, 2–14 Jan 2025 (boardings at 11–50% of usual).
+  - Glen Waverley closed 7–10 Apr 2025.
+  - Metro Tunnel testing, 14, 15 and 17 Apr 2025: Sunbury closed; Pakenham and Cranbourne at 22–28%. These dates are confirmed by [Pakenham News](https://pakenhamnews.starcommunity.com.au/news/2025-04-14/bus-replacements-for-pakenham-cranbourne-lines/).
+  - Mernda, 26 May 2025.
+- **Handling:** disrupted days are set to missing for training, and test scores exclude them.
+- **Not flagged:** Frankston boardings ran about 50% of usual on several days in Jul–Aug 2024, with services at 84–87%. That's just above the service cut-off, so the rule doesn't flag it.
+
+**Low days that aren't disruptions.** The models get these as calendar features:
+- **Christmas–New Year (23 Dec – 3 Jan):** weekdays ran at 13–44% of a normal school holiday day, with full services. They get their own effect, separate from ordinary school holidays.
+- **Mon 4 Nov 2024,** the day before Melbourne Cup: 40–60% of normal on every line.
+- **Fri 20 Dec 2024,** the last Friday before Christmas: about 50% of normal.
+- **Tue–Thu 22–24 Apr 2025,** between Easter Monday and ANZAC Day: about 26% below a normal week. There's no precedent in training, so it's left unmodelled and reported as a known miss.
+
+**Public holidays vary a lot.** AM peak on a weekday public holiday ranges from **3%** of a normal weekday (Christmas Day) to **17%** (Boxing Day). The four test-period holidays were 7–10%. None of them falls in the training months, so all holidays outside the Christmas period share one effect.
+
+**Hurstbridge level shift (unexplained).**
+- Hurstbridge's normal-weekday AM peak was about 15–16k in Jul–Sep 2024 and about 12.4–13.6k from October 2024 to March 2025. It recovered to about 15–16k in Apr–May 2025.
+- The other 14 lines moved the opposite way over the same months.
+- The models learned the low level and under-forecast Hurstbridge by 13–19% in the back-test. It's the only line where the forecast didn't beat the baseline.
+- No cause has been found, so none is stated.
+
 ## Known limitations (from the DataVic dataset description)
 
 - Counts are **modelled estimates** built from myki touch-ons, barrier counts, manual surveys and conductor counts, not direct counts.
@@ -148,6 +187,8 @@ The source has a `Line_Name` of `Richmond and City Loop` with 30,702 rows. It is
 | Busiest-services ranking covers regular services only: those running on at least 100 of the 199 normal weekdays | Otherwise one-off event trains rank first (a Flemington Racecourse train that ran once ranked #1). The 2,560 regular services run 100–199 days and the 1,198 others run 62 or fewer, so the cut-off sits in a natural gap |
 | Validate the modelled data against DTP's official monthly patronage, comparing the shape (index) rather than the level | Independent source (myki and barrier data). The levels differ by design, because boardings include transfers. Check 8 |
 | Transfer hub = 2 or more boardings per barrier entry | A transparent rule that picks out exactly Flinders Street (2.43), Richmond (2.92) and North Melbourne (2.99). Check 7 |
+| Forecast disruption rule: closed, or AM peak services **and** boardings under 80% of usual for the line and day type | Services alone flagged public holidays and a data quirk (3 Mar 2025). Requiring both catches real disruptions only (see Forecast data issues) |
+| Forecast results written to `MART.FORECAST_LINE_DEMAND`, `MART.FORECAST_BACKTEST` and `MART.FORECAST_METRICS`, rebuilt on every notebook run | Power BI's forecast page reads them directly. The notebook verifies the row counts after writing |
 
 ## Open questions
 
@@ -160,3 +201,4 @@ None at the moment.
   - Alamein and Williamstown stay in the forecast with a caveat (check 4).
   - `Richmond and City Loop` is kept in totals but flagged as not a corridor line.
 - Day 3, step 2: March 2025's +16% is real and recurs every year, confirmed against DTP's official patronage (check 8). The cause isn't established, so none is stated.
+- Day 4: the cause of the Hurstbridge level shift (Oct 2024 – Mar 2025) is still unknown. It's recorded as a limitation, not an open question, because it doesn't block anything.
