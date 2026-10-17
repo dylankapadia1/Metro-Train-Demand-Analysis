@@ -5,7 +5,7 @@
 - **Notebook:** `notebooks/forecast_weekday_peak.ipynb`. It runs top to bottom in about 4 minutes and writes its results to Snowflake.
 - **Snowflake tables for Power BI:** `MART.FORECAST_LINE_DEMAND`, `MART.FORECAST_BACKTEST`, `MART.FORECAST_METRICS`.
 - **Charts:** `images/forecast_backtest.png`, `images/forecast_next_quarter.png`.
-- **Status:** 11 Oct 2026. These numbers become final once they match the dashboard.
+- **Status:** 17 Oct 2026. Checked against the Power BI forecast page: the outlook (197K), the network error (8.0% vs 16.2%) and all 32 per-line error values match.
 
 ## Summary
 
