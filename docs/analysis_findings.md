@@ -4,7 +4,7 @@ The answers to the seven analysis questions, one finding per question with the n
 
 - **Source queries:** `sql/06_analysis.sql`, run against the `MART` tables built by `sql/05_marts.sql`.
 - **Data:** DTP Train Service Passenger Counts, FY2024-25 (1 Jul 2024 – 30 Jun 2025), Metro Trains only.
-- **Status:** draft, 11 Oct 2026. The numbers have not yet been checked against the dashboard.
+- **Status:** 17 Oct 2026. The figures that also appear on the Power BI dashboard (average weekday boardings, AM peak share, the day-type comparison, the line and station rankings and the crowded-services table) were checked against it and match.
 
 **Reading the numbers**
 - Boardings are DTP's **modelled estimates**, rounded to multiples of 10.

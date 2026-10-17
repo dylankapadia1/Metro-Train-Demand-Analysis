@@ -1,0 +1,239 @@
+// =============================================================================
+// measures.dax - every measure in metro_demand.pbix, with what it does and why.
+//
+// How to use (Power BI Desktop, DAX query view):
+//   1. Create an empty table called _Measures first (Home > Enter data > name it
+//      "_Measures" > Load). Measures live there so they're easy to find.
+//   2. Open DAX query view (left bar, the "DAX" icon), paste this whole file, Run.
+//      The result grid shows each measure's value: compare with the
+//      "expected" comments, which come from the SQL marts and the notebook.
+//   3. Click "Update model: Add new measures" above the query (or right-click
+//      each DEFINE MEASURE line > "Add measure to model") to save them.
+//
+// Table and column names are exactly as imported from Snowflake (upper case).
+// "Normal weekday" = not a public or school holiday (199 days in FY2024-25).
+// =============================================================================
+
+DEFINE
+
+    // -------------------------------------------------------------------------
+    // Demand (DAILY_LINE_DEMAND: date x line x time band)
+    // -------------------------------------------------------------------------
+
+    // All boardings in the current filter context. Expected, no filters: 224,374,850
+    MEASURE '_Measures'[Total Boardings] =
+        SUM ( DAILY_LINE_DEMAND[BOARDINGS] )
+
+    // Number of dates with data in the current filter context, so averages are per day.
+    MEASURE '_Measures'[Days With Data] =
+        DISTINCTCOUNT ( DAILY_LINE_DEMAND[BUSINESS_DATE] )
+
+    // Average boardings per day for whatever is filtered (line, month, day type...).
+    MEASURE '_Measures'[Avg Daily Boardings] =
+        DIVIDE ( [Total Boardings], [Days With Data] )
+
+    // Average boardings on a NORMAL weekday, whatever day type is selected elsewhere.
+    // REMOVEFILTERS clears any day-type slicer, then the filter sets Normal Weekday.
+    // Expected, whole network: 752,932
+    MEASURE '_Measures'[Avg Weekday Boardings] =
+        CALCULATE (
+            [Avg Daily Boardings],
+            REMOVEFILTERS ( DIM_DAY_TYPE ),
+            DIM_DAY_TYPE[DAY_TYPE] = "Normal Weekday"
+        )
+
+    // Boardings departing 07:00-08:59.
+    MEASURE '_Measures'[AM Peak Boardings] =
+        CALCULATE ( [Total Boardings], DIM_TIME_BAND[TIME_BAND] = "AM Peak" )
+
+    // Share of boardings in the AM peak. Expected: 21.4% all days, 25.7% on normal weekdays
+    MEASURE '_Measures'[AM Peak Share %] =
+        DIVIDE ( [AM Peak Boardings], [Total Boardings] )
+
+    // 7-day moving average: each date averages itself and the 6 calendar days before it,
+    // which smooths out the weekday/weekend cycle (same as 06_analysis.sql Q7b).
+    // Expected, whole network: highest 771,023 (week ending 18 Mar 2025),
+    // lowest 326,039 (week ending 5 Jan 2025)
+    MEASURE '_Measures'[Boardings 7D MA] =
+        VAR EndDate = MAX ( DIM_CALENDAR[CALENDAR_DATE] )
+        VAR Window7 = DATESINPERIOD ( DIM_CALENDAR[CALENDAR_DATE], EndDate, -7, DAY )
+        RETURN
+            AVERAGEX ( Window7, CALCULATE ( [Total Boardings] ) )
+
+    // How much busier/quieter the selected day type is than a normal weekday, per day.
+    // Expected (whole day): School Holiday -14.1%, Saturday -43.2%, Sunday -58.9%,
+    // Public Holiday -59.6%. With an AM Peak filter: -26.7%, -87.8%, -92.0%, -91.1%
+    MEASURE '_Measures'[vs Normal Weekday %] =
+        VAR SelectedAvg = [Avg Daily Boardings]
+        VAR NormalWeekday =
+            CALCULATE (
+                [Avg Daily Boardings],
+                REMOVEFILTERS ( DIM_DAY_TYPE ),
+                DIM_DAY_TYPE[DAY_TYPE] = "Normal Weekday"
+            )
+        RETURN
+            DIVIDE ( SelectedAvg, NormalWeekday ) - 1
+
+    // The same comparison for the AM peak only (07:00-08:59): both the selected day type
+    // and the normal weekday are filtered to the AM peak, so commuting is compared like for like.
+    // Used next to [vs Normal Weekday %] in one clustered bar chart on page 1.
+    // Expected: School Holiday -26.7%, Saturday -87.8%, Sunday -92.0%, Public Holiday -91.1%
+    MEASURE '_Measures'[vs Normal Weekday % (AM Peak)] =
+        CALCULATE ( [vs Normal Weekday %], DIM_TIME_BAND[TIME_BAND] = "AM Peak" )
+
+    // Corridor line with the most boardings in the current context. Expected: Pakenham
+    // TOPN keeps the top row of a table ranked by a measure; MAXX reads its label.
+    MEASURE '_Measures'[Busiest Line] =
+        VAR CorridorLines =
+            CALCULATETABLE ( VALUES ( DIM_LINE[LINE_LABEL] ), DIM_LINE[IS_CORRIDOR_LINE] = TRUE () )
+        VAR Top1 = TOPN ( 1, CorridorLines, [Total Boardings], DESC )
+        RETURN
+            MAXX ( Top1, DIM_LINE[LINE_LABEL] )
+
+    // -------------------------------------------------------------------------
+    // Stations and time of day (STATION_SUMMARY, HOURLY_PROFILE)
+    // These tables hold totals per day type, so the average divides by the number
+    // of days of the selected day types (DIM_DAY_TYPE[DAYS_IN_DATA]).
+    // -------------------------------------------------------------------------
+
+    // Expected, normal weekday: Flinders Street 154,863, Southern Cross 67,119,
+    // Melbourne Central 41,042; 15th is Oakleigh 5,527
+    MEASURE '_Measures'[Avg Station Boardings] =
+        DIVIDE ( SUM ( STATION_SUMMARY[TOTAL_BOARDINGS] ), SUM ( DIM_DAY_TYPE[DAYS_IN_DATA] ) )
+
+    // Average boardings per day in each 30-minute departure block.
+    // Expected, normal weekday: Pakenham 17:00 = 6,315; Lilydale 08:00 = 6,250
+    MEASURE '_Measures'[Avg Half-Hour Boardings] =
+        DIVIDE ( SUM ( HOURLY_PROFILE[TOTAL_BOARDINGS] ), SUM ( DIM_DAY_TYPE[DAYS_IN_DATA] ) )
+
+    // -------------------------------------------------------------------------
+    // Forecast (FORECAST_LINE_DEMAND, FORECAST_BACKTEST, FORECAST_METRICS)
+    // The forecast tables hold one row per model; these measures pick the ensemble,
+    // the model used for the forecast (average of Prophet and SARIMAX).
+    // -------------------------------------------------------------------------
+
+    // Actual weekday AM peak boardings on the 15 forecast lines (history for the forecast chart).
+    // Expected: 244,340 on Tue 1 Apr 2025
+    MEASURE '_Measures'[Actual AM Peak] =
+        CALCULATE (
+            [AM Peak Boardings],
+            DIM_LINE[INCLUDE_IN_FORECAST] = TRUE (),
+            DIM_CALENDAR[IS_WEEKDAY] = TRUE ()
+        )
+
+    // Jul-Sep 2025 forecast. Expected network: 222,239 on 1 Jul 2025; 10,066 on 26 Sep (AFL GF eve)
+    MEASURE '_Measures'[Forecast] =
+        CALCULATE (
+            SUM ( FORECAST_LINE_DEMAND[FORECAST] ),
+            FORECAST_LINE_DEMAND[MODEL] = "Ensemble (Prophet + SARIMAX)"
+        )
+
+    MEASURE '_Measures'[Forecast Lower 80] =
+        CALCULATE (
+            SUM ( FORECAST_LINE_DEMAND[LOWER_80] ),
+            FORECAST_LINE_DEMAND[MODEL] = "Ensemble (Prophet + SARIMAX)"
+        )
+
+    MEASURE '_Measures'[Forecast Upper 80] =
+        CALCULATE (
+            SUM ( FORECAST_LINE_DEMAND[UPPER_80] ),
+            FORECAST_LINE_DEMAND[MODEL] = "Ensemble (Prophet + SARIMAX)"
+        )
+
+    // Average forecast per normal weekday. Expected network: 197,024 (80% range 166,955-231,385)
+    MEASURE '_Measures'[Forecast Avg Normal Weekday] =
+        VAR NormalDays =
+            CALCULATETABLE (
+                VALUES ( FORECAST_LINE_DEMAND[DATE] ),
+                FORECAST_LINE_DEMAND[DAY_TYPE] = "Normal Weekday"
+            )
+        RETURN
+            DIVIDE (
+                CALCULATE ( [Forecast], FORECAST_LINE_DEMAND[DAY_TYPE] = "Normal Weekday" ),
+                COUNTROWS ( NormalDays )
+            )
+
+    // Back-test (Apr-Jun 2025): the actual value is repeated on each model's rows,
+    // so it's read from the ensemble rows only to avoid counting it four times.
+    MEASURE '_Measures'[Backtest Actual] =
+        CALCULATE (
+            SUM ( FORECAST_BACKTEST[ACTUAL] ),
+            FORECAST_BACKTEST[MODEL] = "Ensemble (Prophet + SARIMAX)"
+        )
+
+    MEASURE '_Measures'[Backtest Forecast] =
+        CALCULATE (
+            SUM ( FORECAST_BACKTEST[FORECAST] ),
+            FORECAST_BACKTEST[MODEL] = "Ensemble (Prophet + SARIMAX)"
+        )
+
+    MEASURE '_Measures'[Backtest Baseline] =
+        CALCULATE (
+            SUM ( FORECAST_BACKTEST[FORECAST] ),
+            FORECAST_BACKTEST[MODEL] = "Baseline (seasonal naive)"
+        )
+
+    // WAPE = total miss / total boardings, on the Apr-Jun 2025 back-test, disrupted days
+    // excluded. FORECAST_METRICS isn't linked to the other tables (it has "Network" and
+    // "All lines" rows), so these measures set their own filters.
+    // Expected: line-level values in docs/forecast_results.md (e.g. Pakenham 10.3% vs 21.3%)
+    MEASURE '_Measures'[Forecast WAPE] =
+        DIVIDE (
+            CALCULATE (
+                AVERAGE ( FORECAST_METRICS[WAPE_PCT] ),
+                FORECAST_METRICS[MODEL] = "Ensemble (Prophet + SARIMAX)"
+            ),
+            100
+        )
+
+    MEASURE '_Measures'[Baseline WAPE] =
+        DIVIDE (
+            CALCULATE (
+                AVERAGE ( FORECAST_METRICS[WAPE_PCT] ),
+                FORECAST_METRICS[MODEL] = "Baseline (seasonal naive)"
+            ),
+            100
+        )
+
+    // Headline accuracy for cards. Expected: 8.0% (forecast) vs 16.2% (baseline)
+    MEASURE '_Measures'[Network Forecast WAPE] =
+        CALCULATE (
+            [Forecast WAPE],
+            FORECAST_METRICS[LINE_NAME] = "Network",
+            FORECAST_METRICS[DAY_GROUP] = "All days"
+        )
+
+    MEASURE '_Measures'[Network Baseline WAPE] =
+        CALCULATE (
+            [Baseline WAPE],
+            FORECAST_METRICS[LINE_NAME] = "Network",
+            FORECAST_METRICS[DAY_GROUP] = "All days"
+        )
+
+// -----------------------------------------------------------------------------
+// Check: run the query and compare each value with the expected one above.
+// -----------------------------------------------------------------------------
+EVALUATE
+ROW (
+    "Total Boardings (224,374,850)", [Total Boardings],
+    "Avg Weekday Boardings (752,932)", [Avg Weekday Boardings],
+    "AM Peak Share % (0.214)", [AM Peak Share %],
+    "Busiest Line (Pakenham)", [Busiest Line],
+    "Forecast Avg Normal Weekday (197,024)", [Forecast Avg Normal Weekday],
+    "Network Forecast WAPE (0.080)", [Network Forecast WAPE],
+    "Network Baseline WAPE (0.162)", [Network Baseline WAPE],
+    "Actual AM Peak, 1 Apr 2025 (244,340)",
+        CALCULATE ( [Actual AM Peak], DIM_CALENDAR[CALENDAR_DATE] = DATE ( 2025, 4, 1 ) ),
+    "Flinders St, normal weekday (154,863)",
+        CALCULATE (
+            [Avg Station Boardings],
+            DIM_STATION[STATION_NAME] = "Flinders Street",
+            DIM_DAY_TYPE[DAY_TYPE] = "Normal Weekday"
+        ),
+    "Saturday vs normal weekday (-0.432)",
+        CALCULATE ( [vs Normal Weekday %], DIM_DAY_TYPE[DAY_TYPE] = "Saturday" ),
+    "Saturday AM peak vs normal weekday (-0.878)",
+        CALCULATE ( [vs Normal Weekday % (AM Peak)], DIM_DAY_TYPE[DAY_TYPE] = "Saturday" ),
+    "7D MA, 18 Mar 2025 (771,023)",
+        CALCULATE ( [Boardings 7D MA], DIM_CALENDAR[CALENDAR_DATE] = DATE ( 2025, 3, 18 ) )
+)
